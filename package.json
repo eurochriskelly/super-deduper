@@ -1,0 +1,15 @@
+{
+  "name": "super-deduper",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "test:setup": "bash scripts/copy-test-data-to-ml.sh",
+    "build": "bash scripts/build.sh",
+    "start": "cd _dist;bash dedupe.sh",
+    "deploy": "bash scripts/deploy.sh"
+  },
+  "author": "",
+  "license": "ISC"
+}

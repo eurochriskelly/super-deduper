@@ -1,0 +1,708 @@
+#!/bin/bash
+#
+# USAGE:
+# ./corby \
+#   [--env {name in env folder}] \
+#   [--new]
+#
+# EXAMPLES:
+# ./corby --env stn_applied --collect --entity "Product" --limit 10 --latest
+#
+# TODO:
+#
+# - Add dry-run reporter for all generic scripts
+#   - Do you want to run a dry run with 1000 records?
+#   - Print out URIs summary
+#   - e.g. 20000 uris were retrieve (showing first 10). Press p to preview or c to continue:
+#
+# - Add limit to prompt with sensible default
+# - Also deploy to PR VM under Batchscipts/_TOOLS/corb-runner
+#
+
+VERSION=1.1.0-rc1
+XCC_JAR=/data/web/cre/Batchscripts/_TOOLS/corb-runner/jar/marklogic-xcc-10.0.7.jar
+CORB_JAR=/data/web/cre/Batchscripts/_TOOLS/corb-runner/jar/marklogic-corb-2.5.2.jar
+CORB_DATA=/data/web/cre/Batchscripts/_TOOLS/corb-runner/common_jobs
+SESSION=~/.corby/$(date +%Y%m%d)
+LAST_REPORT
+start=
+NOW=
+
+# Plumming
+{
+    main() {
+        cd /data/web/cre/Batchscripts/_TOOLS/corb-runner
+        heading "main"
+        init $@
+        startSession
+        if [ ! -f "${SESSION}" ];then
+            echo "No environment file [$envFile] found! Create a new session with ./corby --session"
+            exit 1
+        fi
+        runStep
+    }
+    
+    runStep() {
+        source $SESSION
+        local state=run
+        if [ -z "$CORBY_JOB_NAME" ];then
+            state=noJobDefined
+            II "No job defined"
+        else
+            II "Job found [$CORBY_JOB_NAME]"
+        fi
+        while true;do
+            source "${SESSION}"
+            showPrompt $state
+            if [ "$state" != "running" ];then
+                read -n1 arg
+            else
+                II "PROCESS RUNNING! Please lets fix this"
+                while true;do
+                    echo -n "."
+                done
+            fi
+            
+            echo ""
+            case $arg in
+                r|R)
+                    if [ "$state" = "viewLastJob" ];then
+                        # Set job to resume
+                        last=$(ls "$CORB_DATA/JOB_*" | sort | tail -n 1)
+                        setJob $last
+                        state=run
+                    else
+                        NOW=$(date +%s)
+                        runPrompt
+                        state=finishedRun
+                    fi
+                ;;
+                v|V)
+                    state=viewLastJob
+                ;;
+                l|L)
+                    less $CORB_LOG_OUTPUT
+                ;;
+                e|E)
+                    vi $CORB_DATA/$CORBY_JOB_NAME/job.properties
+                    II "Job edit complete."
+                    state=run
+                ;;
+                i|I)
+                    state=sessionInfo
+                    II "Session info requested."
+                ;;
+                s|S)
+                    test -d ~/.corby && rm ~/.corby/*
+                    startSession
+                    state=noJobDefined
+                ;;
+                n|N)
+                    createNewJob
+                    state=run
+                ;;
+                x|X)
+                    echo "Good bye!"
+                    exit 0
+                ;;
+                *)
+                    echo "Invalid option [$arg]!"
+                ;;
+            esac
+            sleep 1
+        done
+    }
+    
+    init() {
+        if [ ! -f $XCC_JAR ];then
+            echo "ERROR: Missing XCC JAR: $XCC_JAR"
+            exit 1
+        fi
+        if [ ! -f $CORB_JAR ];then
+            echo "ERROR: Missing CORB JAR: $CORB_JAR"
+            exit 1
+        fi
+        
+        test -d "~/.corby" || mkdir -p ~/.corby
+        
+        if [ ! -d $CORB_DATA ];then
+            mkdir -p $CORB_DATA
+            test -d $CORB_DATA || {
+                echo "ERROR: Could not create CORB DATA folder: $CORB_DATA"
+                exit 1
+            }
+            chmod -R 777 $CORB_DATA
+        fi
+        
+        start=$(date +%s)
+    }
+}
+
+# Display related
+{
+    II() {
+        echo -e "${BGreen}$ ${Color_Off} $@"
+    }
+    
+    # Color definitions
+    {
+        # Reset
+        Color_Off='\033[0m'       # Text Reset
+        
+        # Regular Colors
+        Black='\033[0;30m'        # Black
+        Red='\033[0;31m'          # Red
+        Green='\033[0;32m'        # Green
+        Yellow='\033[0;33m'       # Yellow
+        Blue='\033[0;34m'         # Blue
+        Purple='\033[0;35m'       # Purple
+        Cyan='\033[0;36m'         # Cyan
+        White='\033[0;37m'        # White
+        
+        # Bold
+        BBlack='\033[1;30m'       # Black
+        BRed='\033[1;31m'         # Red
+        BGreen='\033[1;32m'       # Green
+        BYellow='\033[1;33m'      # Yellow
+        BBlue='\033[1;34m'        # Blue
+        BPurple='\033[1;35m'      # Purple
+        BCyan='\033[1;36m'        # Cyan
+        BWhite='\033[1;37m'       # White
+        
+        # Underline
+        UBlack='\033[4;30m'       # Black
+        URed='\033[4;31m'         # Red
+        UGreen='\033[4;32m'       # Green
+        UYellow='\033[4;33m'      # Yellow
+        UBlue='\033[4;34m'        # Blue
+        UPurple='\033[4;35m'      # Purple
+        UCyan='\033[4;36m'        # Cyan
+        UWhite='\033[4;37m'       # White
+        
+        # Background
+        On_Black='\033[40m'       # Black
+        On_Red='\033[41m'         # Red
+        On_Green='\033[42m'       # Green
+        On_Yellow='\033[43m'      # Yellow
+        On_Blue='\033[44m'        # Blue
+        On_Purple='\033[45m'      # Purple
+        On_Cyan='\033[46m'        # Cyan
+        On_White='\033[47m'       # White
+        
+        # High Intensity
+        IBlack='\033[0;90m'       # Black
+        IRed='\033[0;91m'         # Red
+        IGreen='\033[0;92m'       # Green
+        IYellow='\033[0;93m'      # Yellow
+        IBlue='\033[0;94m'        # Blue
+        IPurple='\033[0;95m'      # Purple
+        ICyan='\033[0;96m'        # Cyan
+        IWhite='\033[0;97m'       # White
+        
+        # Bold High Intensity
+        BIBlack='\033[1;90m'      # Black
+        BIRed='\033[1;91m'        # Red
+        BIGreen='\033[1;92m'      # Green
+        BIYellow='\033[1;93m'     # Yellow
+        BIBlue='\033[1;94m'       # Blue
+        BIPurple='\033[1;95m'     # Purple
+        BICyan='\033[1;96m'       # Cyan
+        BIWhite='\033[1;97m'      # White
+        
+        # High Intensity backgrounds
+        On_IBlack='\033[0;100m'   # Black
+        On_IRed='\033[0;101m'     # Red
+        On_IGreen='\033[0;102m'   # Green
+        On_IYellow='\033[0;103m'  # Yellow
+        On_IBlue='\033[0;104m'    # Blue
+        On_IPurple='\033[0;105m'  # Purple
+        On_ICyan='\033[0;106m'    # Cyan
+        On_IWhite='\033[0;107m'   # White
+    }
+    
+    line() {
+        echo -e "${Green}$ : : : : : : : : : : : : : : : : : : : : : : :${Color_Off}"
+    }
+    
+    cExit() {
+        echo -en "e${UWhite}X${Color_Off}it";
+    }
+    g() { echo -en "${Green}$@${Color_Off}";  }
+    y() { echo -en "${Yellow}$@${Color_Off}";  }
+    r() { echo -en "${Red}$@${Color_Off}";  }
+    b() { echo -en "${Blue}$@${Color_Off}";  }
+    C() {
+        local opt=$1
+        local first=${opt:0:1}
+        local rest=${opt:1}
+        echo -en "${UWhite}${first}${Color_Off}${rest}"
+    }
+    
+    heading() {
+        local subheading=$1
+        clear
+        echo -e "${BGreen}$ CORBY V${VERSION}${Color_Off}| $subheading"
+    }
+    
+    runPrompt() {
+        local job=${1:-$CORBY_JOB_NAME}
+        if [ -z "$job" ];then
+            echo "Error job variable not defined!"
+            exit 1
+        fi
+        # Run the job
+        if [ ! -d "$CORB_DATA/$job" ];then
+            echo "Error: There is no such job found [$CORB_DATA/$job]"
+            exit 1
+        fi
+        
+        ### Request run mode from user except in the case of custom queries
+
+        local mode=
+        if [ -n "$(cat $CORB_DATA/$job/job.properties | sort | grep -v "^#"|grep "URIS-MODULE=")" ];then
+            # use a write mode for customer queries
+            # todo: in future, differentiated between queries that read and write.
+            mode=label
+        else
+            echo -en "`g $` `y Choose mode` [`C Count`/`C Resave`/`C Fields`/`C Delete`/`C Archive`/`C Label`/`C Header`/<`C Uris`>] `y '>'` "
+            read -n1 choice
+            case $choice in
+                u|U) mode=uris ;;
+                f|F) mode=fields ;;
+                d|D) mode=delete ;;
+                a|A) mode=archive ;;
+                l|L) mode=label ;;
+                r|R) mode=resave ;;
+                h|H) mode=header ;;
+                x|X)
+                    echo ""
+                    echo -e "`b User exit selected!`"
+                exit ;;
+                *) mode=uris ;;
+            esac
+        fi
+
+        ### Ask for number of loops
+        local defaultLoops=1
+        local numLoops=
+        echo -en "`g $` `y "Enter number of loops you want to run "` <1>? > "
+        read numLoops
+        if [ -z "$numLoops" ];then numLoops=$defaultLoops;fi
+
+        ### Number of nodes to run on
+        local isolate=0
+
+        echo -en "\n`g $` `y Run on ` `C One` `y node or` <`C All`> `y 'nodes? >'` "
+        read -n1 chooseHost
+        case $chooseHost in
+            o|O)
+                echo ""
+                # todo: get isolate value
+                isolate=1
+                local n=1
+                for node in $ALL_HOSTS;do
+                    echo "   $n $node: "
+                    n=$(($n + 1))
+                done
+                echo -en "Pick node: "
+                read -n1 nodeChoice
+                echo ""
+                n=1
+                for node in $ALL_HOSTS;do
+                    if [ "$nodeChoice" -eq "$n" ];then
+                        isolate=$node
+                    fi
+                    n=$(($n + 1))
+                done
+                ;;
+            a|A)
+                echo " All nodes selected"
+                ;;
+            *)
+                echo " All nodes selected"
+                ;;
+        esac
+        
+        # TODO: PARALLEL comes last
+        runJobFile $NOW $mode $isolate $numLoops
+    }
+    showPrompt() {
+        heading "Run mode"
+        echo -e "${Green}$ Session: ${UGreen}I${Color_Off}${Green}nfo/Re${UGreen}s${Color_Off}${Green}et${Color_Off}"
+        #II ".."
+        # cat $SESSION
+        II ""
+        local show=$1
+        echo -e "${Green}$ State: [${Color_Off}$show${Green}]${Color_Off}"
+        line
+        echo -e "${Blue}"
+        case $show in
+            viewLastJob)
+                last=$(ls $CORB_DATA/ | sort | tail -n 1)
+                
+                echo ""
+                jobSummary $last
+            ;;
+            
+            viewCurrentJob)
+                II "Properties ..."
+                jobSummary
+            ;;
+            
+            sessionInfo)
+                II "Session     : $SESSION"
+                II "Host        : $HOST"
+                II "Threads     : $THREAD_COUNT"
+                II "Batch size  : $BATCH"
+                II "Report file : $CORB_DATA_REPORT"
+                II "CoRB log    : $CORB_LOG_OUTPUT"
+                II "Job name    : $CORBY_JOB_NAME"
+            ;;
+            
+            finishedRun)
+                local rep=$CORB_DATA/$CORBY_JOB_NAME/data/report-${NOW}.txt
+                local num=`wc -l $rep`
+                local severe=`cat $CORB_LOG_OUTPUT|grep SEVERE`
+                if [ -n "$severe" ];then
+                    echo -e "${BRed}ERROR: SEVERE warnings found in log!${Blue}"
+                    echo "- Showing last 20 lines of log [$CORB_LOG_OUTPUT]:"
+                    tail -n 20 $CORB_LOG_OUTPUT
+                    echo -e "${BRed}"
+                    cat $CORB_LOG_OUTPUT|grep SEVERE
+                    echo -e "${Blue}"
+                else
+                    echo "- No SEVERE warings in log ..."
+                    head -n 1 $CORB_LOG_OUTPUT
+                    tail -n 2 $CORB_LOG_OUTPUT
+                    echo ""
+                fi
+                line
+                echo -e "${Blue}"
+                echo "Results containing [$num] entries "
+                echo ""
+                if [ -f "${LAST_REPORT}".gz ];then
+                    echo "- Stored at [$LAST_REPORT]"
+                    echo "First 10 lines:"
+                    zcat "${LAST_REPORT}".gz | head -n 10
+                else
+                    echo "Expected report [$LAST_REPORT.gz] was not stored"
+                fi
+            ;;
+            
+            run)
+                local numCorbProcs=$(ps ax | grep corb| grep java|wc -l)
+                if [ "$numCorbProcs" -gt "0" ];then
+                    echo -e "${Red}WARNING:${Blue} There are corb processes already running"
+                fi
+                local dsize=$(du $CORB_DATA -h --max-depth 0| awk '{print $1}')
+                local jsize=$(du $CORB_DATA/$CORBY_JOB_NAME/data -h --max-depth 0|awk '{print $1}')
+                echo "DATA SIZE: ${dsize}"
+                echo "JOB SIZE: ${jsize}"
+                echo ""
+                echo "- Job [$job] ready to run:"
+                echo "--------------------------"
+                jobSummary
+                echo ""
+                echo "- Check settings and edit if required!"
+            ;;
+            
+            noJobDefined)
+                echo ""
+                echo "This session has no job yet."
+                echo "Please create a new job or resume last."
+                echo ""
+            ;;
+            *) ;;
+        esac
+        echo -e "${Color_Off}"
+        line
+        II ""
+        local CAO="${Green}\$${Color_Off} ${Yellow}Choose an option :${Color_Off} "
+        case $show in
+            viewLastJob)
+                echo -ne "$CAO [`C Resume` job/`C New` job/`cExit`] "
+            ;;
+            
+            sessionInfo)
+                echo -ne "$CAO [`C New`/`C View` last/`cExit`] "
+            ;;
+            
+            run)
+                echo -ne "$CAO [`C Edit`/`C Run`/`cExit`] "
+            ;;
+            
+            finishedRun)
+                echo -ne "$CAO [`C Edit`/`C Re-run`/`C Preview`/`C Log`/`cExit`] "
+            ;;
+            
+            *)
+                echo -ne "$CAO [`C New`/`C View` last/`cExit`] "
+            ;;
+        esac
+        #echo -n "$ Choose an option ( [R]un | [E]dit | e[X]it ):  > "
+    }
+    
+    jobSummary() {
+        local job=${1:-$CORBY_JOB_NAME}
+        cat $CORB_DATA/$job/job.properties | sort | grep -v "^#"
+    }
+}
+
+# Job management
+{
+    
+    # Set the current job name
+    setJob() {
+        local job=$1
+        echo "CORBY_JOB_NAME=$job" >> $SESSION
+    }
+    
+    #
+    # Creates a new session for the day
+    #
+    startSession() {
+        # rm ~/.corby/* # Maybe clear session history?
+        if [ -f "$SESSION" ];then
+            echo "Resuming existing session [$SESSION]"
+        else
+            heading "Creating session ..."
+            II "`y Available environments are: `"
+            i=0
+            for e in $(ls env/*.sh);do
+                i=$(($i + 1))
+                bn=$(basename $e)
+                echo "  $i: ${bn/.sh/}"
+            done
+            
+            while [ -z "$envName" ];do
+                echo -en "`g $` `y Please 'select number >' `"
+                read -n1 selected
+                i=0
+                for e in $(ls env/*.sh);do
+                    i=$(($i + 1))
+                    if [ "$i" = "$selected" ];then
+                        envName=$e
+                    fi
+                done
+            done
+            
+            echo ""
+            
+            while [ -z "$username" ];do
+                echo -en "${Green}$ ${Color_Off}${Yellow}Username? > ${Color_Off}"
+                read username
+            done
+            while [ -z "$password" ];do
+                echo -en "${Green}$ ${Color_Off}${Yellow}Password? > ${Color_Off}"
+                read -s password
+                value=`sed -n '/inf/,/com/p' $envName`
+                echo "value of $value"
+            done
+            
+            # Todo: put login as first step. If username and password are not
+            # correct, warn user that they cannot connect
+            # e.g. download creditstore config, extract version and print it if
+            # successful using `GET v1/documents`
+            
+            if [ ! -f "$envName" ];then
+                echo "Error: Environment script [$envName] not found on list. Please check again"
+                exit 1
+            fi
+            echo ""
+            II "For the incident you are solving enter if applicable or press ENTER: "
+            echo -en "${Green}$ ${Color_Off}${Yellow}Enter change request id > ${Color_Off}"
+            read crNumber
+            touch $SESSION
+            echo "#!/bin/bash" > $SESSION
+            if [ ! -z "$crNumber" ];then
+                echo "CORBY_CR_NUMBER=$crNumber" >> $SESSION
+            fi
+            echo "CORBY_ENV_TEMPLATE=$envName" >> $SESSION
+            echo "CORBY_MODE=uris" >> $SESSION
+            echo "USER=$username" >> $SESSION
+            echo "PASS=$password" >> $SESSION
+            cat $envName | grep -v "^#" >> $SESSION
+            II "Session created!"
+        fi
+    }
+    
+    #
+    # Run a job
+    #
+    runJobFile() {
+        local instance=$1
+        local mode=$2
+        local isolate=$3
+        local numLoops=$4
+        
+        local useHost=
+        if [ "$isolate" == "0" ];then
+            useHost=$HOST
+        else
+            useHost=$isolate
+        fi
+
+        source $SESSION
+        
+        local jdir=$CORB_DATA/$CORBY_JOB_NAME/
+        local prop=$CORB_DATA/$CORBY_JOB_NAME/${instance}-job.properties
+        touch $prop
+        echo "# CoRB job instance [$CORBY_JOB_NAME/$instance] generated by 'CREDITSTORE COMMON CORB RUNNER'" > $prop
+        echo "# - Generated at time [$(date)]." >> $prop
+        echo "" >> $prop
+        echo "# common properties that never change" >> $prop
+        echo "URIS-MODULE.ABN_CHANGE_REQUEST=$CORBY_CR_NUBMER" >> $prop
+        echo "PROCESS-MODULE.ABN_CHANGE_REQUEST=$CORBY_CR_NUBMER" >> $prop
+        echo "URIS-MODULE=/ext/corb/common/collect.xqy" >> $prop
+        echo "PRE-BATCH-MODULE=/ext/corb/common/pre-batch.xqy" >> $prop
+        echo "POST-BATCH-MODULE=/ext/corb/common/post-batch.xqy" >> $prop
+        echo "PROCESS-MODULE=/ext/corb/common/process.xqy" >> $prop
+        echo "THREAD-COUNT=${THREAD_COUNT:-2}" >> $prop
+        echo "BATCH-SIZE=${BATCH:-50}" >> $prop
+        # Required variables must always be present but may be over ridden by user
+        echo "" >> $prop
+        
+        # Make sure external variables are defined!
+        # todo: add isolate option for collector if $isolate is 1
+        echo "URIS-MODULE.limit=" >> $prop
+        echo "URIS-MODULE.entities=" >> $prop
+        echo "URIS-MODULE.isolateNode=$isolate" >> $prop
+        echo "URIS-MODULE.collections=" >> $prop
+        echo "URIS-MODULE.olderThan=" >> $prop
+        
+        echo "URIS-MODULE.elementQueries=" >> $prop
+        echo "URIS-MODULE.elementValueQueries=" >> $prop
+        # 
+        echo "PROCESS-MODULE.fields=" >> $prop
+        echo "PROCESS-MODULE.filterFields=" >> $prop
+        echo "PROCESS-MODULE.archiveDatabase=credits-dh-CANONICAL-ARCHIVE" >> $prop
+        echo "PROCESS-MODULE.collections=" >> $prop
+        echo "PROCESS-MODULE.ABN_CR_NUMBER=" >> $prop
+        
+        echo "PROCESS-MODULE.mode=$mode" >> $prop
+        echo "PRE-BATCH-MODULE.mode=$mode" >> $prop
+        echo "POST-BATCH-MODULE.mode=$mode" >> $prop
+        echo "" >> $prop
+        echo "# unique properties of this run" >> $prop
+        cat $CORB_DATA/$CORBY_JOB_NAME/job.properties | grep -v "^#" >> $prop
+        
+        if [ -n "$(cat $prop|grep URIS-FILE)" ];then
+            cat $prop | grep -v "URIS-MODULE" > ${prop}.tmp
+            mv ${prop}.tmp $prop
+        fi
+        
+        local logfile="$CORB_DATA/$CORBY_JOB_NAME"/logs/"${instance}".log
+        touch $logfile
+        sleep 2
+        chmod 777 $logfile
+
+        for i in $(seq $numLoops);do
+            local dataReport=$jdir/data/report-${NOW}-${i}.txt
+            started=$(date +%s)
+            echo "Creating data report file: [$dataReport]"
+            touch $dataReport
+            echo "Running Loop #$i" | tee $logfile
+            # set -o xtrace
+            nohup java -server -cp .:$XCC_JAR:$CORB_JAR \
+                -DXCC-CONNECTION-URI=xcc://$USER:$PASS@$useHost:$PORT \
+                -DOPTIONS-FILE="$prop" \
+                -DEXPORT-FILE-NAME="$dataReport" \
+                com.marklogic.developer.corb.Manager \
+                > $logfile 2>&1 &
+            local pid=$!
+            # set +o xtrace
+            touch $dataReport
+            chmod 777 $dataReport
+            echo "Logging to [$logfile]"
+            echo "CORB_LOG_OUTPUT=$logfile" >> $SESSION
+            echo "CORB_DATA_REPORT=$dataReport" >> $SESSION
+            monitorLog $logfile $pid
+            wait $pid
+            ## Compress the log files (it will be large)
+            gzip $dataReport
+            LAST_REPORT=$dataReport
+            ended=$(date +%s)
+            elapsed=$(($ended - $started))
+            echo "Iteration [$i] took [$elapsed] seconds"
+        done
+        #-DPOST-BATCH-PROCESS-MODULE=post-batch.xqy
+        sleep 5
+    }
+
+    #
+    # Create a new job file for editing
+    #
+    createNewJob() {
+        local jobName=JOB_$(date +%s)
+        local jdir=$CORB_DATA/$jobName
+        source $SESSION
+        
+        mkdir -p $jdir/logs
+        mkdir -p $jdir/data
+        chmod -R 777 $jdir
+        
+        touch $jdir/job.properties
+        if [ -L currentJob ];then rm currentJob;fi
+        ln -s $jdir currentJob
+        
+        local p=$jdir/job.properties
+        
+        echo "## CoRB properties generated by 'CREDITSTORE COMMON CORB RUNNER'" > $p
+        echo "## - Generated at time [$(date)]." >> $p
+        # Global options go here
+        # echo "*.byNode=$CORBY_BY_NODE" >> $p
+        
+        echo "URIS-MODULE.limit=100" >> $p
+        echo "# URIS-MODULE.entities=Product,Guarantee" >> $p
+        #,cre:source/acbs
+        echo "# URIS-MODULE.collections=cre:raw,latest" >> $p
+        echo "# URIS-MODULE.olderThan=2022-04-08" >> $p
+        echo "# URIS-MODULE.elementQueries=acbs:ACOLLAT,acbs:JCALM" >> $p
+        echo "# URIS-MODULE.elementValueQueries=acbs:J_FOO#123,acbs:agreementId#" >> $p
+        echo "# URIS-MODULE.customInput=foo:123" >> $p
+        echo "# URIS-MODULE.businessDate=2021-12-31" >> $p
+        echo "" >> $p
+        echo "" >> $p
+        echo "###### UPDATE MODE SPECIFIC OPTIONS HERE" >> $p
+        echo "## MODE OPTIONS FOR 'fields'" >> $p
+        echo "# PROCESS-MODULE.fields=agreementId,hid" >> $p
+        echo "" >> $p
+        echo "## MODE OPTIONS FOR 'label'" >> $p
+        echo "# PROCESS-MODULE.collections=/end-of-month" >> $p
+        echo "" >> $p
+        echo "## MODE OPTIONS FOR 'archive'" >> $p
+        echo "# PROCESS-MODULE.archiveDatabase=credits-dh-ARCHIVE-CANONICAL" >> $p
+        echo "" >> $p
+        echo "##" >> $p
+        echo "# Possible modes include: uris,archive,label" >> $p
+        echo ""
+        echo "# CUSTOM COLLECTORS"
+        echo "# URIS-MODULE=/ext/corb/1.perf/triple-archival/collect.xqy" >> $p
+        echo "# PROCESS-MODULE=/ext/corb/1.perf/triple-archival/process.xqy" >> $p
+        echo "# URIS-MODULE=/ext/corb/2.datafix/valid-end-before-start/collect.xqy" >> $p
+        echo "# PROCESS-MODULE=/ext/corb/2.datafix/valid-end-before-start/process.xqy" >> $p
+        echo ""
+        echo "New job created [$jobName]! "
+        echo ""
+        echo "CORBY_JOB_NAME=$jobName" >> $SESSION
+    }
+    
+    monitorLog() {
+        local log=$1
+        local pid=$2
+        local lastLine=
+        while [ -n "$pid" ];do
+            line=$(cat $log|tail -n 1|grep INFO|grep completed)
+            if [ "$line" != "$lastLine" ];then
+                echo $line
+                lastLine=$line
+            fi
+            if [ ! -d /proc/$pid/ ];then
+                pid=
+            fi
+            sleep 1
+        done
+    }
+}
+
+main $@
