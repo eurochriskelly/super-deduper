@@ -8,10 +8,9 @@ const setLimit = LIMIT ? +LIMIT : 100
 
 // Collect temporal stack id's not already assigned for processing
 const collected = collections(`/${ENTITY}`, `limit=${setLimit}`, andQuery([
-    // todo: generalize this for more projects
+    // todo: Further generalize this script to adapt to different scenarios
     collectionQuery(cols.temporal),
     notQuery(collectionQuery(cols.assigned))
 ]))
 
-console.log(`Collected are`, collected)
 fn.insertBefore(collected,0,fn.count(collected))
